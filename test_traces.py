@@ -20,6 +20,22 @@ import httpx
 
 TRACES = [
     {
+        "id": "C4",
+        "name": "Graduate Financial Analysts",
+        "opener": "Hiring graduate financial analysts — final-year students, no work experience. We need numerical reasoning and a finance knowledge test.",
+        "facts": [
+            "Good. Can you also add a situational judgement element — work-context decision making for graduates?",
+            "That covers it. Numerical + Graduate Scenarios as first filter, domain tests for shortlisted candidates.",
+        ],
+        "expected": [
+            "SHL Verify Interactive – Numerical Reasoning",
+            "Financial Accounting (New)",
+            "Basic Statistics (New)",
+            "Graduate Scenarios",
+            "Occupational Personality Questionnaire OPQ32r",
+        ],
+    },
+    {
         "id": "C1",
         "name": "Senior Leadership — OPQ + Reports",
         "opener": "We need a solution for senior leadership.",
@@ -64,22 +80,6 @@ TRACES = [
             "Contact Center Call Simulation (New)",
             "Entry Level Customer Serv-Retail & Contact Center",
             "Customer Service Phone Simulation",
-        ],
-    },
-    {
-        "id": "C4",
-        "name": "Graduate Financial Analysts",
-        "opener": "Hiring graduate financial analysts — final-year students, no work experience. We need numerical reasoning and a finance knowledge test.",
-        "facts": [
-            "Good. Can you also add a situational judgement element — work-context decision making for graduates?",
-            "That covers it. Numerical + Graduate Scenarios as first filter, domain tests for shortlisted candidates.",
-        ],
-        "expected": [
-            "SHL Verify Interactive – Numerical Reasoning",
-            "Financial Accounting (New)",
-            "Basic Statistics (New)",
-            "Graduate Scenarios",
-            "Occupational Personality Questionnaire OPQ32r",
         ],
     },
     {

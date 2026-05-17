@@ -4,7 +4,7 @@ import json
 import os
 import re
 import time
-
+from ftfy import fix_text
 import httpx
 
 from catalog import resolve_name
@@ -351,7 +351,25 @@ _SAFE_DEFAULT = {
     "recommendations": None,
     "end_of_conversation": False,
 }
+def clean_text(text: str) -> str:
+    text = fix_text(str(text))
 
+    # ftfy may not fully repair truncated mojibake like "â€ Numerical"
+    # because the final byte/character is already missing.
+    replacements = {
+        "â€“": "–",
+        "â€”": "—",
+        "â€ Numerical": "– Numerical",
+        "â€ Numerica": "– Numerica",
+        "â€": "–",
+        "â\x80\x93": "–",
+        "â\x80\x94": "—",
+    }
+
+    for bad, good in replacements.items():
+        text = text.replace(bad, good)
+
+    return text
 
 def validate_response(raw: str, valid_urls: set[str], catalog_by_name: dict) -> dict:
     """
@@ -360,12 +378,13 @@ def validate_response(raw: str, valid_urls: set[str], catalog_by_name: dict) -> 
     no hallucinated products, no duplicates, max 10.
     """
     try:
+        raw = fix_text(raw)
         data = _extract_json(raw)
     except Exception as e:
         print(f"[agent] JSON parse failed: {e} | raw[:200]: {raw[:200]}")
         return dict(_SAFE_DEFAULT)
 
-    reply = str(data.get("reply", "")).strip() or _SAFE_DEFAULT["reply"]
+    reply = fix_text(str(data.get("reply", "")).strip()) or _SAFE_DEFAULT["reply"]
     eoc   = bool(data.get("end_of_conversation", False))
     recs  = data.get("recommendations")
 
@@ -381,8 +400,8 @@ def validate_response(raw: str, valid_urls: set[str], catalog_by_name: dict) -> 
             for item in recs:
                 if not isinstance(item, dict):
                     continue
-                name = str(item.get("name", "")).strip()
-                url  = str(item.get("url",  "")).strip()
+                name = fix_text(str(item.get("name", "")).strip())
+                url  = fix_text(str(item.get("url",  "")).strip())
 
                 # Resolve via alias map + normalization
                 canonical = resolve_name(name, catalog_by_name)
@@ -413,10 +432,10 @@ def validate_response(raw: str, valid_urls: set[str], catalog_by_name: dict) -> 
 
 def build_prompt(messages: list[dict], catalog_context: str) -> str:
     history = "\n".join(
-        f"{'USER' if m['role'] == 'user' else 'ASSISTANT'}: {m['content']}"
+        f"{'USER' if m['role'] == 'user' else 'ASSISTANT'}: {clean_text(m['content'])}"
         for m in messages
     )
     return SYSTEM_PROMPT.format(
-        catalog_context=catalog_context,
+        catalog_context=clean_text(catalog_context),
         conversation_history=history,
     )

@@ -9,6 +9,7 @@ Only contains:
 import json
 import re
 from pathlib import Path
+from ftfy import fix_text
 
 # ── Key type shortcodes ───────────────────────────────────────────────────────
 
@@ -131,7 +132,7 @@ def load_catalog(path: str = "data/shl_product_catalog.json") -> list[dict]:
     p = Path(path)
     if not p.exists():
         p = Path(__file__).parent / path
-    with open(p, "r", errors="replace") as f:
+    with open(p, "r", errors="replace",encoding="utf-8") as f:
         raw = f.read()
     fixed = re.sub(
         r'"([^"]*)"',
@@ -188,7 +189,6 @@ def _normalize_mojibake(name: str) -> str:
         if bad in name:
             name = name.replace(bad, "\u2014")
     return name
-
 
 def resolve_name(name: str, catalog_by_name: dict) -> str:
     """Resolve corrupted/aliased product name to canonical catalog name."""

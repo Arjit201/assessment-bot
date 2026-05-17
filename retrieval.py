@@ -5,6 +5,7 @@ Retrieval is purely keyword scoring over catalog search text, with domain boosts
 that are derived from reading the catalog (not from inspecting test traces).
 """
 from catalog import format_product_for_prompt
+from ftfy import fix_text
 
 # ── Stop words ────────────────────────────────────────────────────────────────
 
@@ -153,10 +154,16 @@ EXCLUDED_PRODUCTS = {
     "Sales Transformation 1.0 - Individual Contributor",
 }
 
+def clean_text(text: str) -> str:
+    text = fix_text(str(text))
+    text = text.replace("â€ Numerical", "– Numerical")
+    text = text.replace("â€ Numerica", "– Numerica")
+    text = text.replace("â€", "–")
+    return text
 
 def extract_signals(messages: list[dict]) -> dict:
     """Extract structured signals from full conversation history."""
-    full = " ".join(m["content"] for m in messages).lower()
+    full = " ".join(clean_text(m["content"]) for m in messages).lower()
 
     seniority = "any"
     for level, kws in _SENIORITY.items():
