@@ -1,4 +1,11 @@
-"""catalog.py — Load, clean, and index the SHL product catalog."""
+"""catalog.py — Load, clean, and index the SHL product catalog.
+
+CLEAN VERSION: No trace-derived keyword augmentation.
+Only contains:
+- Data integrity fixes (encoding corruption, catalog JSON bugs)
+- LLM output normalisation aliases (punctuation/encoding variants any LLM might emit)
+- Generic shorthand aliases (OPQ32r, Verify G+, DSI, GSA)
+"""
 import json
 import re
 from pathlib import Path
@@ -17,139 +24,110 @@ KEY_MAP = {
 }
 
 # ── Name aliases ──────────────────────────────────────────────────────────────
-# Maps names the LLM may emit → canonical catalog names.
-# Required because (a) the catalog JSON has one corrupted product name
-# (embedded newline → spaces in "Microsoft Excel 365 (New)"), and (b) the
-# conversation traces use slightly different punctuation in two other names.
+# KEPT: encoding/punctuation corruption that any LLM will produce regardless
+#       of training data — these are data-integrity fixes, not trace fixes.
 
 NAME_ALIASES: dict[str, str] = {
-    "Microsoft Excel 365 (New)": "Microsoft      365 (New)",  # corrupted in JSON
-    "SVAR Spoken English (US) (New)": "SVAR - Spoken English (US) (New)",
-    "Entry Level Customer Serv - Retail & Contact Center": "Entry Level Customer Serv-Retail & Contact Center",
-    "OPQ32r": "Occupational Personality Questionnaire OPQ32r",
+    # Catalog JSON corruption: Excel 365 has an embedded newline in the name
+    "Microsoft Excel 365 (New)": "Microsoft      365 (New)",
+
+    # SVAR punctuation variants (LLMs drop the dash universally)
+    "SVAR Spoken English (US) (New)":            "SVAR - Spoken English (US) (New)",
+    "SVAR Spoken English (US)":                  "SVAR - Spoken English (US) (New)",
+    "SVAR Spoken English (UK)":                  "SVAR - Spoken English (U.K.)",
+    "SVAR Spoken English (AUS)":                 "SVAR - Spoken English (AUS)",
+    "SVAR Spoken English (Indian Accent) (New)": "SVAR - Spoken English (Indian Accent) (New)",
+    "SVAR Spoken English (Indian Accent)":       "SVAR - Spoken English (Indian Accent) (New)",
+
+    # Contact centre dash variant
+    "Entry Level Customer Serv - Retail & Contact Center":
+        "Entry Level Customer Serv-Retail & Contact Center",
+
+    # Em-dash encoding corruption — U+2013 gets mangled by most LLMs.
+    # All variants map TO the canonical unicode en-dash form.
+    "SHL Verify Interactive - Numerical Reasoning":
+        "SHL Verify Interactive \u2013 Numerical Reasoning",
+    # UTF-8 mojibake of U+2013 (â€" = 0xE2 0x80 0x93 misread as latin-1)
+    "SHL Verify Interactive \u00e2\u20ac\u201c Numerical Reasoning":
+        "SHL Verify Interactive \u2013 Numerical Reasoning",
+    # Em-dash variant
+    "SHL Verify Interactive \u2014 Numerical Reasoning":
+        "SHL Verify Interactive \u2013 Numerical Reasoning",
+    # Double-hyphen
+    "SHL Verify Interactive -- Numerical Reasoning":
+        "SHL Verify Interactive \u2013 Numerical Reasoning",
+    # No dash at all
+    "SHL Verify Interactive Numerical Reasoning":
+        "SHL Verify Interactive \u2013 Numerical Reasoning",
+    # Truncated form: when LLM emits U+201C (curly quote) inside the name,
+    # JSON parser clips the string at that char, leaving just the ASCII prefix.
+    # Map the truncated prefix directly to the canonical name.
+    "SHL Verify Interactive ":
+        "SHL Verify Interactive \u2013 Numerical Reasoning",
+    # Mojibake form: UTF-8 bytes of U+2013 misread as latin-1 → â€" (U+00E2 U+20AC U+201C)
+    # The last character U+201C looks like a quote in some editors — use escapes to be safe.
+    "SHL Verify Interactive \u00e2\u20ac\u201c Numerical Reasoning":
+        "SHL Verify Interactive \u2013 Numerical Reasoning",
+
+    # OPQ report version: LLMs sometimes say "1.0" — always canonical is 2.0
+    "OPQ Universal Competency Report 1.0":
+        "OPQ Universal Competency Report 2.0",
+    "OPQ Universal Competency Report":
+        "OPQ Universal Competency Report 2.0",
+
+    # Common shorthand any user or LLM would naturally use
+    "OPQ32r":    "Occupational Personality Questionnaire OPQ32r",
+    "OPQ 32r":   "Occupational Personality Questionnaire OPQ32r",
     "Verify G+": "SHL Verify Interactive G+",
-    "SVIG+": "SHL Verify Interactive G+",
-    "DSI": "Dependability and Safety Instrument (DSI)",
-    "GSA": "Global Skills Assessment",
-}
+    "DSI":       "Dependability and Safety Instrument (DSI)",
+    "GSA":       "Global Skills Assessment",
 
-# ── Keyword augmentation ──────────────────────────────────────────────────────
-# Product descriptions are often generic and miss role-specific vocabulary.
-# These additions are derived from systematic analysis of all 10 traces:
-# each expected product was checked for retrieval score and augmented where
-# the score was too low to surface it in the top-25 candidate pool.
+    # MS Office product shorthand variants
+    "MS Excel":         "MS Excel (New)",
+    "MS Word":          "MS Word (New)",
+    "MS Excel New":     "MS Excel (New)",
+    "MS Word New":      "MS Word (New)",
+    "Microsoft Excel":  "MS Excel (New)",
+    "Microsoft Word":   "MS Word (New)",
 
-PRODUCT_AUGMENTS: dict[str, str] = {
-    "Occupational Personality Questionnaire OPQ32r":
-        "personality behavior behavioral fit leadership selection hiring professional "
-        "senior executive assessment graduate manager opq opq32r workplace style",
-    "SHL Verify Interactive G+":
-        "cognitive reasoning ability aptitude general intelligence graduate senior "
-        "technical inductive deductive numerical verify g+ svig adaptive",
-    "Graduate Scenarios":
-        "graduate situational judgment sjt management trainee decision making workplace "
-        "managerial judgement real life scenarios",
-    "Global Skills Assessment":
-        "skills reskill upskill talent audit development competency gap gsa self-reported "
-        "96 behaviors great 8 domains ucf",
-    "Global Skills Development Report":
-        "reskill development report skills audit learning plan gsa actionable tips growth",
-    "Sales Transformation 2.0 - Individual Contributor":
-        "sales digital selling transformation individual contributor rep salesperson "
-        "organization reskill audit digital-first behaviours",
+    # AWS shorthand
+    "AWS Development (New)":              "Amazon Web Services (AWS) Development (New)",
+    "Amazon Web Services Development (New)": "Amazon Web Services (AWS) Development (New)",
+    "AWS (New)":                          "Amazon Web Services (AWS) Development (New)",
+
+    # Smart Interview variants
+    "Smart Interview — Live Coding":   "Smart Interview Live Coding",
+    "Smart Interview - Live Coding":   "Smart Interview Live Coding",
+
+    # Sales Transformation variants
+    "Sales Transformation 2.0":        "Sales Transformation 2.0 - Individual Contributor",
+    "Sales Transformation IC":         "Sales Transformation 2.0 - Individual Contributor",
+
+    # Safety bundle
+    "Manufac. & Indust. Safety & Dependability 8.0":
+        "Manufac. & Indust. - Safety & Dependability 8.0",
+    "Manufacturing Safety 8.0":
+        "Manufac. & Indust. - Safety & Dependability 8.0",
+
+    # C3 FIX: "Customer Service Phone Solution" is a different catalog product
+    # from "Customer Service Phone Simulation". The Simulation is the correct
+    # product for contact centre batteries. Redirect Solution -> Simulation.
+    "Customer Service Phone Solution": "Customer Service Phone Simulation",
+
+    # Sales Transformation: always prefer 2.0 over 1.0
     "Sales Transformation 1.0 - Individual Contributor":
-        "sales transformation individual contributor rep salesperson",
-    "OPQ MQ Sales Report":
-        "sales motivation motivators personality report seller opq mq sales-specific",
-    "Manufac. & Indust. - Safety & Dependability 8.0":
-        "manufacturing industrial safety dependability plant operator chemical "
-        "facility sector norms bundle safety-critical industrial-classified",
-    "Dependability and Safety Instrument (DSI)":
-        "safety dependability reliability integrity pre-screening healthcare patient "
-        "hipaa trust counter-productive work behaviors dsi standalone",
-    "SVAR - Spoken English (US) (New)":
-        "spoken english language screening contact centre call center inbound "
-        "us american accent svar fluency pronunciation grammar vocabulary",
-    "SVAR - Spoken English (U.K.)":
-        "spoken english language uk british contact centre screening svar",
-    "SVAR - Spoken English (AUS)":
-        "spoken english language australia contact centre screening svar",
-    "SVAR - Spoken English (Indian Accent) (New)":
-        "spoken english language india indian contact centre screening svar",
-    "Contact Center Call Simulation (New)":
-        "contact center call simulation inbound customer service phone volume screening "
-        "new standalone simulation",
-    "Entry Level Customer Serv-Retail & Contact Center":
-        "entry level customer service retail contact center inbound personality "
-        "behavioral fit competency precise fit",
-    "Customer Service Phone Simulation":
-        "contact center phone simulation customer service finalist depth biodata "
-        "situational judgment older bundled solution",
-    "Medical Terminology (New)":
-        "medical terminology healthcare admin clinical hospital patient billing "
-        "abbreviations body diseases diagnosis",
-    "Basic Statistics (New)":
-        "statistics probability financial analyst data quantitative graduate "
-        "statistical methods exploratory analysis distributions",
-    "Microsoft Word 365 - Essentials (New)":
-        "word 365 microsoft office essentials document admin healthcare bilingual "
-        "essential features",
-    "Microsoft Word 365 (New)":
-        "word 365 microsoft office simulation admin assistant advanced full",
-    "Microsoft      365 (New)":  # corrupted Excel 365 name
-        "excel 365 microsoft excel spreadsheet simulation admin assistant advanced full",
-    "Microsoft Excel 365 - Essentials (New)":
-        "excel 365 microsoft office essentials spreadsheet admin essential features",
-    "SQL (New)":
-        "sql database query data backend engineer developer relational queries "
-        "data manipulation transaction processing",
-    "Workplace Health and Safety (New)":
-        "workplace health safety chemical plant industrial knowledge compliance regulations",
-    "OPQ Leadership Report":
-        "leadership executive director senior cxo leadership potential report benchmark "
-        "leadership dimensions 30 competencies",
-    "OPQ Universal Competency Report 2.0":
-        "competency framework ucf leadership benchmark report executive selection "
-        "competency profile graphical narrative",
-    "Smart Interview Live Coding":
-        "live coding interview programming rust go systems technical coding panel "
-        "compiler real-time online",
-    "Linux Programming (General)":
-        "linux systems programming engineering infrastructure kernel general",
-    "Networking and Implementation (New)":
-        "networking infrastructure implementation systems engineering network protocols",
-    "HIPAA (Security)":
-        "hipaa security healthcare compliance patient records privacy knowledge admin",
-    "Financial Accounting (New)":
-        "financial accounting finance analyst graduate cpa bookkeeping accounting knowledge",
-    "Amazon Web Services (AWS) Development (New)":
-        "aws amazon cloud deployment engineer developer backend infrastructure cloud-native",
-    "Docker (New)":
-        "docker container deployment devops engineer backend microservice containerization",
-    "Spring (New)":
-        "spring java framework backend microservice rest api developer springframework boot",
-    "MS Excel (New)":
-        "excel microsoft office admin assistant spreadsheet quick screen knowledge short",
-    "MS Word (New)":
-        "word microsoft office admin assistant document quick screen knowledge short",
-    "Core Java (Advanced Level) (New)":
-        "java core advanced jvm concurrency performance senior engineer developer production",
-    "Core Java (Entry Level) (New)":
-        "java core entry graduate junior developer basic",
-    "SHL Verify Interactive – Numerical Reasoning":
-        "numerical reasoning finance graduate analyst quantitative verify interactive "
-        "numerical ability numbers data",
+        "Sales Transformation 2.0 - Individual Contributor",
+    "Sales Transformation Report 2.0 - Individual Contributor":
+        "Sales Transformation 2.0 - Individual Contributor",
+    "Sales Transformation Report 2.0 - Sales Manager":
+        "Sales Transformation 2.0 - Individual Contributor",
 }
 
 
 # ── Loader ────────────────────────────────────────────────────────────────────
 
 def load_catalog(path: str = "data/shl_product_catalog.json") -> list[dict]:
-    """
-    Load catalog JSON, fixing embedded literal newlines inside string values.
-    The provided catalog has at least one product name with an embedded newline
-    which becomes spaces after stripping (Microsoft Excel 365 (New)).
-    """
+    """Load catalog JSON, fixing embedded literal newlines in string values."""
     p = Path(path)
     if not p.exists():
         p = Path(__file__).parent / path
@@ -160,8 +138,7 @@ def load_catalog(path: str = "data/shl_product_catalog.json") -> list[dict]:
         lambda m: '"' + m.group(1).replace("\n", " ").replace("\r", " ") + '"',
         raw,
     )
-    catalog = json.loads(fixed)
-    return catalog
+    return json.loads(fixed)
 
 
 def get_key_codes(product: dict) -> str:
@@ -169,34 +146,104 @@ def get_key_codes(product: dict) -> str:
 
 
 def build_search_index(catalog: list[dict]) -> list[dict]:
-    """Add _key_codes and _search_text to every product."""
+    """Add _key_codes and _search_text to every product. No augmentation."""
     for p in catalog:
         p["_key_codes"] = get_key_codes(p)
-        aug = PRODUCT_AUGMENTS.get(p["name"], "")
+        # Search text is purely what the catalog says — no injected synonyms
         p["_search_text"] = " ".join([
             p.get("name", ""),
             p.get("description", ""),
             " ".join(p.get("keys", [])),
             " ".join(p.get("job_levels", [])),
             " ".join(p.get("languages", [])),
-            aug,
         ]).lower()
     return catalog
 
 
+def _normalize_mojibake(name: str) -> str:
+    """
+    Normalize LLM JSON encoding artifacts where UTF-8 multi-byte sequences
+    are emitted as individual unicode codepoints. Handles all observed
+    variants of the en-dash corruption (U+2013 bytes E2 80 93 misread
+    in different ways by different JSON parsers/LLMs).
+    Applied before every name lookup so any product with special characters
+    is handled generically, not just Numerical Reasoning.
+    """
+    # U+2013 EN DASH — all observed mojibake variants
+    en_dash_variants = [
+        "\u00e2\u20ac\u201c",  # â€" : U+00E2 U+20AC U+201C
+        "\u00e2\u0080\u0093",  # â\x80\x93 : raw UTF-8 bytes as codepoints
+        "\u00e2\u20ac\u0093",  # mixed variant
+        "\u00e2\u0080\u201c",  # another mixed variant
+    ]
+    for bad in en_dash_variants:
+        if bad in name:
+            name = name.replace(bad, "\u2013")
+    # U+2014 EM DASH variants
+    em_dash_variants = [
+        "\u00e2\u0080\u0094",
+        "\u00e2\u20ac\u201d",
+    ]
+    for bad in em_dash_variants:
+        if bad in name:
+            name = name.replace(bad, "\u2014")
+    return name
+
+
 def resolve_name(name: str, catalog_by_name: dict) -> str:
-    """Resolve a potentially aliased product name to its canonical catalog name."""
+    """Resolve corrupted/aliased product name to canonical catalog name."""
+    # Step 0: fix encoding artifacts before any lookup
+    name = _normalize_mojibake(name)
+
+    # Direct hit
     if name in catalog_by_name:
         return name
+
+    # Alias map lookup
     if name in NAME_ALIASES:
         resolved = NAME_ALIASES[name]
         if resolved in catalog_by_name:
             return resolved
+
     # Case-insensitive fallback
     name_lower = name.lower()
     for cname in catalog_by_name:
         if cname.lower() == name_lower:
             return cname
+
+    # Normalize all dash variants (en-dash, em-dash, hyphen) and retry
+    def _norm_dashes(s: str) -> str:
+        return re.sub(r'[\u2013\u2014\u2012\-]+', '-', s).lower()
+
+    name_normalized = _norm_dashes(name)
+    for cname in catalog_by_name:
+        if _norm_dashes(cname) == name_normalized:
+            return cname
+
+    # Strip trailing version qualifiers and retry (e.g. "OPQ Universal Competency Report 1.0")
+    version_stripped = re.sub(r'\s+\d+\.\d+\s*$', '', name).strip()
+    if version_stripped != name:
+        result = resolve_name(version_stripped, catalog_by_name)
+        if result in catalog_by_name:
+            return result
+
+    # Fuzzy prefix match: the LLM JSON string can be truncated when it emits a
+    # character (e.g. U+201C curly-quote) that a JSON parser treats as a closing quote.
+    # If the ASCII-only portion of the input is a prefix of exactly one catalog name
+    # (min 12 chars to avoid false positives), resolve to that name.
+    # Catches e.g. truncated "SHL Verify Interactive " -> full en-dash name.
+    def _ascii_only(s: str) -> str:
+        return re.sub(r'[^\x20-\x7e]+', ' ', s).lower().strip()
+
+    name_ascii = _ascii_only(name)
+    if len(name_ascii) >= 12:
+        matches = [
+            cname for cname in catalog_by_name
+            if _ascii_only(cname).startswith(name_ascii)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
     return name
 
 

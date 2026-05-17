@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from catalog import load_catalog, build_search_index
-from retrieval import extract_signals, retrieve_candidates, apply_anchors, build_catalog_context
+from retrieval import extract_signals, retrieve_candidates, apply_anchors, build_catalog_context, is_context_sufficient
 from agent import build_prompt, call_llm, validate_response
 
 # ── Global state (populated at startup) ──────────────────────────────────────
@@ -100,7 +100,16 @@ async def chat(req: ChatRequest):
     # ── 3. Retrieve relevant catalog candidates ───────────────────────────────
     candidates = retrieve_candidates(signals, _catalog, top_k=20)
     candidates = apply_anchors(candidates, signals, _catalog_by_name)
-    catalog_context = build_catalog_context(candidates)
+
+    # ── 3b. Compute context sufficiency and prepend as hard directive ─────────
+    sufficient = is_context_sufficient(signals, messages)
+    status_header = (
+        "CONTEXT STATUS: SUFFICIENT — you have enough context, recommend now.\n\n"
+        if sufficient else
+        "CONTEXT STATUS: INSUFFICIENT — ask exactly ONE clarifying question, "
+        "return recommendations: null. Do not recommend yet.\n\n"
+    )
+    catalog_context = status_header + build_catalog_context(candidates)
 
     # ── 4. Build prompt and call LLM ─────────────────────────────────────────
     prompt = build_prompt(messages, catalog_context)
