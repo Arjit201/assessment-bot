@@ -1,6 +1,5 @@
 .env
 __pycache__/
-Dockerfile
 eval_results.json
 chat.py
 backup/
